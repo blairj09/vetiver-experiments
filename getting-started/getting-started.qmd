@@ -1,0 +1,123 @@
+---
+title: "Getting Started with Vetiver"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: setup
+# Packages ----
+library(vetiver)
+library(tidymodels)
+library(pins)
+library(ggplot2)
+```
+
+## Version
+
+Train a model
+
+```{r}
+car_mod <-
+    workflow(mpg ~ ., linear_reg()) |> 
+    fit(mtcars)
+```
+
+Turn the model into a vetiver model
+
+```{r}
+v <- vetiver_model(car_mod, "cars-model")
+v
+```
+
+Pin the created vetiver model to a Pins board
+
+```{r}
+model_board <- board_rsconnect()
+model_board |> 
+    vetiver_pin_write(v)
+```
+
+Train and pin a new model
+
+```{r}
+car_mod <-
+    workflow(mpg ~ ., decision_tree(mode = "regression")) |>
+    fit(mtcars)
+
+v <- vetiver_model(car_mod, "cars-model")
+
+model_board |> vetiver_pin_write(v)
+```
+
+Look at model versions
+
+```{r}
+model_board |> pin_versions("james/cars-model")
+```
+
+## Deploy
+
+Create Plumber API file for deployment
+
+```{r}
+model_board |> 
+    vetiver_write_plumber("cars-model")
+```
+
+The API was published to RStudio Connect. This can be done in multiple ways:
+
+-   CI/CD tools (GH Actions)
+
+-   GitHub deployment supported by RSC
+
+-   Push button deployment from RStudio IDE (used in this example)
+
+-   CLI deployment using `rsconnect`
+
+Submit new data to published API
+
+```{r}
+endpoint <- vetiver_endpoint("https://colorado.rstudio.com/rsc/james/vetiver/predict")
+predict(endpoint, mtcars)
+```
+
+## Monitor
+
+Establish initial components necessary for model monitoring
+
+```{r}
+v <- vetiver_pin_read(model_board, "james/cars-model")
+
+cars <- readr::read_csv("https://vetiver.rstudio.com/get-started/new-cars.csv")
+original_cars <- slice(cars, 1:14)
+
+(original_metrics <- augment(v, new_data = original_cars) |> 
+    vetiver_compute_metrics(date_obs, "week", mpg, .pred))
+```
+
+Pin metrics to board
+
+```{r}
+model_board |> pin_write(original_metrics, "tree-metrics")
+```
+
+Add new metrics and supplement the existing metrics pin
+
+```{r}
+new_cars <- slice(cars, -1:-7)
+(new_metrics <- augment(v, new_data = new_cars) |> 
+    vetiver_compute_metrics(date_obs, "week", mpg, .pred))
+
+model_board |> vetiver_pin_metrics(new_metrics, "tree-metrics", overwrite = TRUE)
+```
+
+Plot metrics
+
+```{r}
+monitoring_metrics <- model_board |> 
+    pin_read("james/tree-metrics")
+
+vetiver_plot_metrics(monitoring_metrics) +
+    scale_size(range = c(2, 4))
+```
